@@ -90,7 +90,7 @@ impl PyHeader {
         }
         let s = unsafe {
             String::from_utf8_unchecked(
-                std::slice::from_raw_parts(kstr.s as *const u8, kstr.l as usize).to_vec(),
+                std::slice::from_raw_parts(kstr.s as *const u8, kstr.l).to_vec(),
             )
         };
         Ok(format!("PyHeader({:?})", s))
@@ -154,7 +154,7 @@ impl PyRecord {
         }
         let s = unsafe {
             String::from_utf8_unchecked(
-                std::slice::from_raw_parts(kstr.s as *const u8, kstr.l as usize).to_vec(),
+                std::slice::from_raw_parts(kstr.s as *const u8, kstr.l).to_vec(),
             )
         };
         Ok(format!("PyRecord({:?})", s))
@@ -193,7 +193,7 @@ impl PyRecord {
     fn id(&self) -> PyResult<String> {
         let id = self.record.id();
         // now look up the ids in the header
-        return Ok(unsafe { String::from_utf8_unchecked(id) });
+        Ok(unsafe { String::from_utf8_unchecked(id) })
     }
 
     fn set_id(&mut self, id: &str) -> PyResult<()> {
@@ -220,7 +220,7 @@ impl PyRecord {
 
     #[getter]
     fn qual(&self) -> PyResult<f32> {
-        Ok(self.record.qual() as f32)
+        Ok(self.record.qual())
     }
 
     fn set_qual(&mut self, qual: f32) -> PyResult<()> {
@@ -230,9 +230,9 @@ impl PyRecord {
 
     #[getter]
     fn filter(&self) -> PyResult<Vec<String>> {
-        let mut filters = self.record.filters();
+        let filters = self.record.filters();
         let mut filter_list = Vec::new();
-        while let Some(filter) = filters.next() {
+        for filter in filters {
             let name = self.record.header().id_to_name(filter);
             filter_list.push(unsafe { String::from_utf8_unchecked(name.to_vec()) });
         }
@@ -242,7 +242,7 @@ impl PyRecord {
     fn set_filter(&mut self, filters: Vec<String>) -> PyResult<()> {
         // Remove all existing filters by setting to PASS
 
-        let current_filters = self.record.filters().into_iter().collect::<Vec<_>>();
+        let current_filters = self.record.filters().collect::<Vec<_>>();
         for filter in current_filters {
             self.record
                 .remove_filter(&filter, true)
@@ -315,11 +315,7 @@ impl PyRecord {
                     .integer()
                     .map_err(|_| PyRuntimeError::new_err("Failed to get integer values"))?;
                 if let Some(values) = values {
-                    values
-                        .iter()
-                        .map(|v| *v)
-                        .collect::<Vec<_>>()
-                        .into_py_any(py)
+                    values.iter().copied().collect::<Vec<_>>().into_py_any(py)
                 } else {
                     let empty: Vec<i32> = vec![];
                     empty.into_py_any(py)
@@ -330,11 +326,7 @@ impl PyRecord {
                     .float()
                     .map_err(|_| PyRuntimeError::new_err("Failed to get float values"))?;
                 if let Some(values) = values {
-                    values
-                        .iter()
-                        .map(|v| *v)
-                        .collect::<Vec<_>>()
-                        .into_py_any(py)
+                    values.iter().copied().collect::<Vec<_>>().into_py_any(py)
                 } else {
                     let empty: Vec<f32> = vec![];
                     empty.into_py_any(py)

@@ -1,3 +1,5 @@
+[![Tests](https://github.com/brentp/bedder-py-wrappers/actions/workflows/test.yml/badge.svg)](https://github.com/brentp/bedder-py-wrappers/actions/workflows/test.yml)
+
 # BCF Reader
 
 A BCF/VCF reader with Python bindings using Rust and HTSlib for use in bedder
@@ -19,8 +21,8 @@ cd bcf-reader
 uv venv bedder-py-env
 
 # 3. Install development dependencies:
-uv pip install pytest maturin
 source bedder-py-env/bin/activate
+uv pip install pytest maturin
 
 # 4. Build and install the package in development mode:
 maturin develop --uv
