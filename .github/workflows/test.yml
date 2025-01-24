@@ -102,11 +102,14 @@ jobs:
 
     - name: Install Python dependencies
       run: |
+        uv venv
+        source .venv/bin/activate
         uv pip install pytest maturin
         uv pip install -e .
         maturin develop --uv
 
     - name: Run tests
       run: |
+        source .venv/bin/activate
         cargo test --verbose
         pytest tests/ -v 

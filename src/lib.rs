@@ -2,7 +2,6 @@ use pyo3::exceptions::{PyKeyError, PyRuntimeError};
 use pyo3::{prelude::*, types::PyDict, IntoPyObjectExt};
 use rust_htslib::bcf::header::TagType;
 use rust_htslib::{bcf, bcf::Read};
-use std::rc::Rc;
 
 #[pyclass(unsendable)]
 struct PyReader {
@@ -33,14 +32,14 @@ impl PyReader {
 
     fn header(&self) -> PyResult<PyHeader> {
         Ok(PyHeader {
-            inner: Rc::new(self.reader.header().inner),
+            inner: unsafe { *rust_htslib::htslib::bcf_hdr_dup(self.reader.header().inner) },
         })
     }
 }
 
 #[pyclass(unsendable)]
 struct PyHeader {
-    inner: Rc<*mut rust_htslib::htslib::bcf_hdr_t>,
+    inner: rust_htslib::htslib::bcf_hdr_t,
 }
 
 #[pymethods]
@@ -69,10 +68,10 @@ impl PyHeader {
         );
 
         let c_str = std::ffi::CString::new(header_line.as_bytes()).unwrap();
-        if 0 != unsafe { rust_htslib::htslib::bcf_hdr_append(*self.inner, c_str.as_ptr()) } {
+        if 0 != unsafe { rust_htslib::htslib::bcf_hdr_append(&mut self.inner, c_str.as_ptr()) } {
             return Err(PyRuntimeError::new_err("Failed appending header line"));
         }
-        if 0 != unsafe { rust_htslib::htslib::bcf_hdr_sync(*self.inner) } {
+        if 0 != unsafe { rust_htslib::htslib::bcf_hdr_sync(&mut self.inner) } {
             return Err(PyRuntimeError::new_err("Failed to sync header"));
         }
 
@@ -86,7 +85,7 @@ impl PyHeader {
             s: std::ptr::null_mut(),
         };
         unsafe {
-            rust_htslib::htslib::bcf_hdr_format(*slf.inner, 0, &mut kstr);
+            rust_htslib::htslib::bcf_hdr_format(&slf.inner, 0, &mut kstr);
         }
         let s = unsafe {
             String::from_utf8_unchecked(
@@ -97,10 +96,11 @@ impl PyHeader {
     }
 
     fn samples(&self) -> PyResult<Vec<String>> {
-        if unsafe { (*(*self.inner)).n[2] } == 0 {
+        if self.inner.n[2] == 0 {
             return Ok(vec![]);
         }
-        let header_view = bcf::header::HeaderView::new(*self.inner);
+        let dup = unsafe { rust_htslib::htslib::bcf_hdr_dup(&self.inner) };
+        let header_view = bcf::header::HeaderView::new(dup as *const _ as *mut _);
         let samples = header_view
             .samples()
             .iter()
@@ -111,7 +111,8 @@ impl PyHeader {
 
     fn has_info(&self, tag: &str) -> PyResult<bool> {
         let tag_bytes = tag.as_bytes();
-        let header_view = bcf::header::HeaderView::new(*self.inner);
+        let dup = unsafe { rust_htslib::htslib::bcf_hdr_dup(&self.inner) };
+        let header_view = bcf::header::HeaderView::new(dup as *const _ as *mut _);
         Ok(header_view
             .info_type(tag_bytes)
             .map(|_| true)
@@ -124,7 +125,26 @@ pub struct PyRecord {
     record: bcf::Record,
 }
 
+impl std::fmt::Debug for PyHeader {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        let mut kstr = rust_htslib::htslib::kstring_t {
+            l: 0,
+            m: 0,
+            s: std::ptr::null_mut(),
+        };
+        unsafe {
+            rust_htslib::htslib::bcf_hdr_format(&self.inner, 0, &mut kstr);
+        }
+        write!(f, "PyHeader({:?})", unsafe {
+            String::from_utf8_unchecked(
+                std::slice::from_raw_parts(kstr.s as *const u8, kstr.l).to_vec(),
+            )
+        })
+    }
+}
+
 impl Drop for PyHeader {
+    // BUG: we leak the bcf_hdr_t here. TODO: fix using Rc
     fn drop(&mut self) {}
 }
 
@@ -139,8 +159,26 @@ impl PyRecord {
 impl PyRecord {
     fn header(&self) -> PyResult<PyHeader> {
         Ok(PyHeader {
-            inner: Rc::new(self.record.header().inner),
+            inner: unsafe { *self.record.header().inner },
         })
+    }
+
+    fn translate(&self, mut dest: PyRefMut<'_, PyHeader>) -> PyResult<()> {
+        if 0 != unsafe {
+            rust_htslib::htslib::bcf_translate(
+                self.record.header().inner,
+                &mut dest.inner,
+                self.record.inner,
+            )
+        } {
+            return Err(PyRuntimeError::new_err("Failed to translate record"));
+        }
+        // now set record.header to the new header
+        let old = self.record.header();
+        unsafe {
+            *old.inner = dest.inner;
+        }
+        Ok(())
     }
 
     fn __repr__(slf: PyRef<'_, Self>) -> PyResult<String> {
@@ -292,7 +330,26 @@ impl PyRecord {
                             PyRuntimeError::new_err(format!("Failed to set string info: {}", e))
                         })?;
                 }
-                _ => return Err(PyRuntimeError::new_err("Unsupported INFO type")),
+                TagType::Flag => {
+                    // try to match bool, if it fails, match [bool]
+                    let b = values.extract::<bool>(py).or_else(|_| {
+                        let v = values.extract::<Vec<bool>>(py)?;
+                        if v.len() == 1 {
+                            Ok(v[0])
+                        } else {
+                            Err(PyRuntimeError::new_err("Expected a single boolean value"))
+                        }
+                    })?;
+                    if b {
+                        self.record.push_info_flag(tag_bytes).map_err(|e| {
+                            PyRuntimeError::new_err(format!("Failed to set flag info: {}", e))
+                        })?;
+                    } else {
+                        self.record.clear_info_flag(tag_bytes).map_err(|e| {
+                            PyRuntimeError::new_err(format!("Failed to clear flag info: {}", e))
+                        })?;
+                    }
+                }
             }
             Ok(())
         })

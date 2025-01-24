@@ -54,6 +54,7 @@ def test_bcf_record_iteration():
 def test_header_functionality_and_set_info():
     reader = PyReader("tests/test.vcf.gz")
     header = reader.header()
+    print(header.samples())
         
         # Test adding new INFO field
     header.add_info({
@@ -70,25 +71,34 @@ def test_header_functionality_and_set_info():
         "Type": "Flag",
         "Description": "Test flag field"
     })
-    assert "ID=TEST_INFO" in str(reader.header())
-    assert "ID=TEST_FLAG" in str(reader.header())
+    assert "ID=TEST_INFO" in str(header)
+    assert "ID=TEST_FLAG" in str(header)
 
     # Test samples access
     samples = header.samples()
     assert isinstance(samples, list)
     assert all(isinstance(s, str) for s in samples)
+
+    import time
     
     # Get first record and its header
     for record in reader:
-        
+        record.translate(header) # normally bedder would call this before user accesses the record
         record.set_info("TEST_INFO", [1.0])
-        record.set_info("TEST_FLAG", [True])
+        record.set_info("TEST_FLAG", True)
 
+        n = 100_000
+        t = time.time()
+        for i in range(n):
+            af = record.info("AF")
+            assert af is not None
+            DP = record.info("DP")
+            assert DP[0] > 0
+        print(f'\n!!!>   accessed {2*n} info records in {time.time() - t:.2f} seconds. records per second: {2 * n / (time.time() - t):.0f}\n')
         print(record)
 
 
         
-        break
 
 if __name__ == "__main__":
     pytest.main(["-s", "--capture=no", __file__])
